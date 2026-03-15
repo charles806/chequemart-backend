@@ -1,0 +1,7 @@
+✅ MongoDB Connected: ac-csrc45b-shard-00-02.horqdmr.mongodb.net
+🚀 Chequemart API running on port 5000
+📡 Environment: development
+🔗 Health check: http://localhost:5000/health
+⚠️ Unverified user logging in: test@example.com
+[0mPOST /api/auth/login [32m200[0m 1377.451 ms - 442[0m
+[0mPOST /api/auth/register [33m409[0m 233.296 ms - 72[0m
