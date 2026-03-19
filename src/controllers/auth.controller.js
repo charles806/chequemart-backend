@@ -74,7 +74,7 @@ const issueTokensAndRespond = async (user, status, res) => {
  */
 export async function register(req, res, next) {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, password, role = 'buyer', storeName, businessCategory, businessAddress, bankCode, accountNumber } = req.body;
 
     // ── Validation ──────────────────────────────────────────────────────
     if (!name || !password) {
@@ -99,8 +99,25 @@ export async function register(req, res, next) {
       });
     }
 
+    // Validate role
+    if (!['buyer', 'seller'].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Role must be either 'buyer' or 'seller'.",
+      });
+    }
+
+    // Seller-specific validation
+    if (role === 'seller') {
+      if (!storeName || !businessCategory || !businessAddress) {
+        return res.status(400).json({
+          success: false,
+          message: "Store name, business category, and business address are required for sellers.",
+        });
+      }
+    }
+
     // Determine auth method based on what was provided
-    // If both email and phone are provided, email takes priority for authMethod
     const authMethod = email ? "local" : "phone";
 
     // ── Check for duplicate email ───────────────────────────────────────
@@ -128,16 +145,52 @@ export async function register(req, res, next) {
     // ── Generate email verification token (only if email provided) ──────
     const verificationToken = email ? randomBytes(32).toString("hex") : null;
 
-    // ── Create customer account (password hashed by pre-save hook) ───────
+    // ── Prepare seller info if role is seller ───────────────────────────
+    let sellerInfo = {};
+    if (role === 'seller') {
+      sellerInfo = {
+        storeName,
+        businessCategory,
+        businessAddress,
+        isApproved: false,
+        businessEmail: email || null,
+      };
+
+      // If bank details provided, attempt to create Paystack subaccount
+      if (bankCode && accountNumber) {
+        try {
+          // Verify bank account with Paystack
+          const resolvedAccount = await resolveAccountNumber(accountNumber, bankCode);
+          const subaccount = await createSubaccount({
+            businessName: storeName,
+            bankCode,
+            accountNumber,
+            description: `Chequemart seller: ${storeName}`,
+          });
+          sellerInfo.paystackSubaccountCode = subaccount.subaccount_code;
+          sellerInfo.paystackSubaccountId = String(subaccount.id);
+          sellerInfo.bankCode = bankCode;
+          sellerInfo.bankName = subaccount.settlement_bank;
+          sellerInfo.accountNumber = accountNumber;
+          sellerInfo.accountName = resolvedAccount.account_name;
+        } catch (paystackError) {
+          console.warn('Paystack subaccount creation failed:', paystackError.message);
+          // Continue without subaccount; seller can add bank details later
+        }
+      }
+    }
+
+    // ── Create user account (password hashed by pre-save hook) ───────
     const user = await User.create({
       name,
       email: email ? email.toLowerCase() : undefined,
       phone: phone || undefined,
       password,
-      role: "customer", // Register route always creates customers
+      role,
       authMethod,
       isVerified: !email, // Phone-only users are auto-verified (no email to send to)
       emailVerificationToken: verificationToken,
+      sellerInfo: role === 'seller' ? sellerInfo : undefined,
     });
 
     // ── Send verification email if email was provided ───────────────────
@@ -152,13 +205,8 @@ export async function register(req, res, next) {
       }
     }
 
-    res.status(201).json({
-      success: true,
-      message: email
-        ? "Account created. Please check your email to verify your account."
-        : "Account created successfully.",
-      user: user.toPublicProfile(),
-    });
+    // ── Issue JWT tokens and respond ────────────────────────────────────
+    await issueTokensAndRespond(user, 201, res);
   } catch (error) {
     next(error);
   }
@@ -315,144 +363,9 @@ export async function refreshToken(req, res, next) {
  * }
  */
 export async function registerVendor(req, res, next) {
-  try {
-    const { name, email, phone, password, storeName, bankCode, accountNumber } =
-      req.body;
-
-    // ── Validation ──────────────────────────────────────────────────────
-    if (!name || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Name and password are required.",
-      });
-    }
-
-    if (!email && !phone) {
-      return res.status(400).json({
-        success: false,
-        message: "Either email or phone number is required.",
-      });
-    }
-
-    if (!storeName || !bankCode || !accountNumber) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Store name, bank code, and account number are required for vendor registration.",
-      });
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 8 characters.",
-      });
-    }
-
-    // ── Check for duplicate email ───────────────────────────────────────
-    if (email) {
-      const emailExists = await User.findOne({ email: email.toLowerCase() });
-      if (emailExists) {
-        return res.status(409).json({
-          success: false,
-          message: "An account with this email already exists.",
-        });
-      }
-    }
-
-    // ── Check for duplicate phone ───────────────────────────────────────
-    if (phone) {
-      const phoneExists = await User.findOne({ phone });
-      if (phoneExists) {
-        return res.status(409).json({
-          success: false,
-          message: "An account with this phone number already exists.",
-        });
-      }
-    }
-
-    // ── Step 1: Verify bank account with Paystack before creating anything ──
-    // This confirms the account number is real and returns the account holder name.
-    let resolvedAccount;
-    try {
-      resolvedAccount = await resolveAccountNumber(accountNumber, bankCode);
-    } catch (paystackError) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Could not verify bank account. Please check your account number and bank.",
-        detail: paystackError.message,
-      });
-    }
-
-    // ── Step 2: Create Paystack subaccount for this vendor ──────────────
-    let subaccount;
-    try {
-      subaccount = await createSubaccount({
-        businessName: storeName,
-        bankCode,
-        accountNumber,
-        description: `Chequemart vendor: ${storeName}`,
-      });
-    } catch (paystackError) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to create payment subaccount. Please try again.",
-        detail: paystackError.message,
-      });
-    }
-
-    // ── Step 3: Generate email verification token (if email provided) ───
-    const authMethod = email ? "local" : "phone";
-    const verificationToken = email ? randomBytes(32).toString("hex") : null;
-
-    // ── Step 4: Create vendor user in MongoDB ────────────────────────────
-    const user = await User.create({
-      name,
-      email: email ? email.toLowerCase() : undefined,
-      phone: phone || undefined,
-      password,
-      role: "vendor",
-      authMethod,
-      isVerified: !email, // Phone-only vendors are auto-verified
-      isActive: true,
-      emailVerificationToken: verificationToken,
-      vendorInfo: {
-        storeName,
-        isApproved: false, // Admin must approve before vendor can receive orders
-
-        // Paystack subaccount details — stored for all future transactions
-        paystackSubaccountCode: subaccount.subaccount_code, // e.g. "ACCT_xxxxxxxxxx"
-        paystackSubaccountId: String(subaccount.id),
-        bankCode,
-        bankName: subaccount.settlement_bank,
-        accountNumber,
-        accountName: resolvedAccount.account_name, // Verified name from Paystack
-      },
-    });
-
-    // ── Step 5: Send verification email if email was provided ────────────
-    if (email) {
-      try {
-        await sendVerificationEmail(user.email, user.name, verificationToken);
-      } catch (emailError) {
-        console.error(
-          "⚠️ Vendor verification email failed:",
-          emailError.message,
-        );
-      }
-    }
-
-    res.status(201).json({
-      success: true,
-      message: email
-        ? "Vendor account created. Please verify your email. Your account is pending admin approval."
-        : "Vendor account created. Your account is pending admin approval.",
-      user: user.toPublicProfile(),
-    });
-  } catch (error) {
-    next(error);
-  }
+  // Override role to 'seller' and delegate to register
+  req.body.role = 'seller';
+  return register(req, res, next);
 }
 
 // ─────────────────────────────────────────────
@@ -749,18 +662,26 @@ export async function forgotPassword(req, res, next) {
     user.passwordResetExpiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save({ validateBeforeSave: false });
 
+    console.log("🔐 Password reset token generated for:", email);
+    console.log("🔗 Reset URL will be:", `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`);
+
     // Send reset email
     try {
-      await sendPasswordResetEmail(user.email, user.name, resetToken);
+      const emailResult = await sendPasswordResetEmail(user.email, user.name, resetToken);
+      if (!emailResult) {
+        // Email failed to send but don't reveal this to user
+        console.error("❌ Email sending returned null");
+      }
     } catch (emailError) {
       // Clean up token if email fails
+      console.error("❌ Failed to send password reset email:", emailError.message);
       user.passwordResetToken = undefined;
       user.passwordResetExpiresAt = undefined;
       await user.save({ validateBeforeSave: false });
 
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send reset email. Please try again.",
+      return res.status(200).json({
+        success: true,
+        message: "If this email is registered, a reset link has been sent.",
       });
     }
 
@@ -769,6 +690,7 @@ export async function forgotPassword(req, res, next) {
       message: "If this email is registered, a reset link has been sent.",
     });
   } catch (error) {
+    console.error("❌ Forgot password error:", error);
     next(error);
   }
 }
@@ -831,7 +753,131 @@ export async function resetPassword(req, res, next) {
 }
 
 // ─────────────────────────────────────────────
-//  11. GET CURRENT USER
+//  12. BECOME SELLER — Upgrade buyer to seller
+// ─────────────────────────────────────────────
+/**
+ * POST /api/auth/become-seller
+ * Upgrades a buyer account to a seller account.
+ * Requires storeName, businessCategory, businessAddress.
+ * Optional bank details for Paystack subaccount.
+ *
+ * Body: { storeName, businessCategory, businessAddress, bankCode?, accountNumber? }
+ */
+export async function becomeSeller(req, res, next) {
+  try {
+    const { storeName, businessCategory, businessAddress, bankCode, accountNumber } = req.body;
+
+    // Validate required fields
+    if (!storeName || !businessCategory || !businessAddress) {
+      return res.status(400).json({
+        success: false,
+        message: "Store name, business category, and business address are required.",
+      });
+    }
+
+    // Ensure user is a buyer
+    if (req.user.role !== 'buyer') {
+      return res.status(400).json({
+        success: false,
+        message: "Only buyers can become sellers.",
+      });
+    }
+
+    // Check if user already has sellerInfo (should not happen)
+    if (req.user.sellerInfo && req.user.sellerInfo.storeName) {
+      return res.status(400).json({
+        success: false,
+        message: "User already has seller information.",
+      });
+    }
+
+    const user = await User.findById(req.user._id);
+
+    // Prepare seller info
+    const sellerInfo = {
+      storeName,
+      businessCategory,
+      businessAddress,
+      isApproved: false,
+      onboardingComplete: false,
+      businessEmail: user.email || null,
+    };
+
+    // If bank details provided, attempt to create Paystack subaccount
+    if (bankCode && accountNumber) {
+      try {
+        const resolvedAccount = await resolveAccountNumber(accountNumber, bankCode);
+        const subaccount = await createSubaccount({
+          businessName: storeName,
+          bankCode,
+          accountNumber,
+          description: `Chequemart seller: ${storeName}`,
+        });
+        sellerInfo.paystackSubaccountCode = subaccount.subaccount_code;
+        sellerInfo.paystackSubaccountId = String(subaccount.id);
+        sellerInfo.bankCode = bankCode;
+        sellerInfo.bankName = subaccount.settlement_bank;
+        sellerInfo.accountNumber = accountNumber;
+        sellerInfo.accountName = resolvedAccount.account_name;
+      } catch (paystackError) {
+        console.warn('Paystack subaccount creation failed:', paystackError.message);
+        // Continue without subaccount; seller can add bank details later
+      }
+    }
+
+    // Update user role and sellerInfo
+    user.role = 'seller';
+    user.sellerInfo = sellerInfo;
+    await user.save();
+
+    // Issue new JWT with seller role
+    await issueTokensAndRespond(user, 200, res);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  13. COMPLETE ONBOARDING
+// ─────────────────────────────────────────────
+/**
+ * POST /api/auth/complete-onboarding
+ * Marks seller onboarding as complete.
+ * Called after seller finishes the onboarding flow.
+ */
+export async function completeOnboarding(req, res, next) {
+  try {
+    const user = req.user;
+
+    if (user.role !== 'seller') {
+      return res.status(400).json({
+        success: false,
+        message: "Only sellers can complete onboarding.",
+      });
+    }
+
+    if (!user.sellerInfo) {
+      return res.status(400).json({
+        success: false,
+        message: "Seller info not found.",
+      });
+    }
+
+    user.sellerInfo.onboardingComplete = true;
+    await user.save({ validateBeforeSave: false });
+
+    res.status(200).json({
+      success: true,
+      message: "Onboarding completed successfully.",
+      user: user.toPublicProfile(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  14. GET CURRENT USER
 // ─────────────────────────────────────────────
 /**
  * GET /api/auth/me

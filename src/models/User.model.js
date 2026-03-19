@@ -60,8 +60,8 @@ const UserSchema = new Schema(
 
     role: {
       type: String,
-      enum: ["admin", "vendor", "customer"],
-      default: "customer",
+      enum: ["admin", "buyer", "seller"],
+      default: "buyer",
     },
 
     isVerified: {
@@ -104,9 +104,12 @@ const UserSchema = new Schema(
       select: false,
     },
 
-    vendorInfo: {
+    sellerInfo: {
       storeName: { type: String, default: null },
+      businessCategory: { type: String, default: null },
+      businessAddress: { type: String, default: null },
       isApproved: { type: Boolean, default: false },
+      onboardingComplete: { type: Boolean, default: false },
       businessEmail: { type: String, default: null },
 
       paystackSubaccountCode: { type: String, default: null },
@@ -148,9 +151,10 @@ UserSchema.methods.matchPassword = async function (enteredPassword) {
 // ────────────────────────────────────────────────────────────────
 // Method: toPublicProfile
 // Returns safe user object for API responses
+// SECURITY: Never expose sensitive seller payment details
 // ────────────────────────────────────────────────────────────────
 UserSchema.methods.toPublicProfile = function () {
-  return {
+  const publicProfile = {
     id: this._id,
     name: this.name,
     email: this.email,
@@ -160,9 +164,24 @@ UserSchema.methods.toPublicProfile = function () {
     isVerified: this.isVerified,
     isActive: this.isActive,
     authMethod: this.authMethod,
-    vendorInfo: this.role === "vendor" ? this.vendorInfo : undefined,
     createdAt: this.createdAt,
   };
+
+  // Only expose safe seller info (no sensitive payment data)
+  if (this.role === "seller" && this.sellerInfo) {
+    publicProfile.sellerInfo = {
+      storeName: this.sellerInfo.storeName,
+      businessCategory: this.sellerInfo.businessCategory,
+      businessAddress: this.sellerInfo.businessAddress,
+      isApproved: this.sellerInfo.isApproved,
+      onboardingComplete: this.sellerInfo.onboardingComplete,
+      businessEmail: this.sellerInfo.businessEmail,
+      // SECURE: Never expose paystackSubaccountCode, paystackSubaccountId,
+      // bankCode, accountNumber, accountName to clients
+    };
+  }
+
+  return publicProfile;
 };
 
 export default model("User", UserSchema);

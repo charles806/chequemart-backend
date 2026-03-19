@@ -25,6 +25,11 @@ export const sendEmail = async ({ to, subject, html, text }) => {
   
   if (!mailTransporter) {
     console.warn("⚠️ Email transporter not configured. Skipping email send.");
+    console.log("SMTP check:", { 
+      SMTP_HOST: process.env.SMTP_HOST, 
+      SMTP_USER: process.env.SMTP_USER ? "present" : "missing",
+      SMTP_PASS: process.env.SMTP_PASS ? "present" : "missing"
+    });
     return null;
   }
 
@@ -36,7 +41,9 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       html,
       text: text || html.replace(/<[^>]*>/g, ""),
     };
+    console.log("📧 Sending email to:", to, "Subject:", subject);
     const info = await mailTransporter.sendMail(mailOptions);
+    console.log("✅ Email sent successfully:", info.messageId);
     return info;
   } catch (error) {
     console.error("⚠️ Failed to send email:", error.message);

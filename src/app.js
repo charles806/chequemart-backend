@@ -4,9 +4,11 @@ import helmet from "helmet";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
+import multer from "multer";
 import { initialize } from "./config/passport.js";
 
 import authRoutes from "./routes/auth.routes.js";
+import userRoutes from "./routes/user.routes.js";
 import { errorHandler, notFound } from "./middleware/error.middleware.js";
 
 const app = express();
@@ -24,6 +26,9 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// Handle multipart/form-data for file uploads (higher limit for images)
+app.use(json({ limit: "10kb" }));
 
 app.get("/", (req, res) => {
   res.json({ success: true, message: "Chequemart API is running" });
@@ -66,6 +71,18 @@ app.use(urlencoded({ extended: true, limit: "10kb" }));
 // Parse cookies (needed for HTTP-only cookie auth)
 app.use(cookieParser());
 
+// Configure multer for file uploads (store in memory)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+});
+
+// Make upload available to routes
+app.use((req, res, next) => {
+  req.upload = upload;
+  next();
+});
+
 // HTTP request logger (only in development)
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
@@ -85,6 +102,7 @@ app.get("/health", (req, res) => {
 
 
 app.use("/api/auth", authLimiter, authRoutes);
+app.use("/api/users", userRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

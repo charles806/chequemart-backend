@@ -26,17 +26,17 @@ const errorHandler = (err, req, res, next) => {
   let message = err.message || "Internal Server Error";
 
   //  Mongoose: Invalid ObjectId (CastError) 
+  // SECURITY: Don't expose err.value to prevent information leakage
   if (err.name === "CastError") {
     statusCode = 400;
-    message = `Invalid ${err.path}: ${err.value}`;
+    message = "Invalid ID format";
   }
 
   //  Mongoose: Duplicate Key Error ─
   if (err.code === 11000) {
     statusCode = 409;
     const field = Object.keys(err.keyValue)[0];
-    const value = err.keyValue[field];
-    message = `${field.charAt(0).toUpperCase() + field.slice(1)} "${value}" is already in use.`;
+    message = `This ${field} is already in use`;
   }
 
   //  Mongoose: Validation Error 
