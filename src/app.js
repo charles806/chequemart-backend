@@ -9,6 +9,8 @@ import { initialize } from "./config/passport.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
+import categoryRoutes from "./routes/category.routes.js";
+import productRoutes from "./routes/product.routes.js";
 import { errorHandler, notFound } from "./middleware/error.middleware.js";
 
 const app = express();
@@ -20,7 +22,7 @@ app.use(helmet());
 // CORS: Only allow requests from the client URL
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: process.env.CLIENT_URL,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -103,6 +105,8 @@ app.get("/health", (req, res) => {
 
 app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/categories", categoryRoutes);
+app.use("/api/products", productRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

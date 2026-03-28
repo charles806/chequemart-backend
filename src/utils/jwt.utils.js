@@ -28,7 +28,7 @@ const generateAccessToken = (payload) => {
 const generateRefreshToken = (payload) => {
   return sign(payload, process.env.JWT_REFRESH_SECRET, {
     algorithm: REFRESH_TOKEN_ALGORITHM,
-    expiresIn: process.env.JWT_REFRESH_EXPIRES || "7d",
+    expiresIn: process.env.JWT_REFRESH_EXPIRES || "14d",
   });
 };
 

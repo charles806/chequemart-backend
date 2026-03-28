@@ -4,13 +4,17 @@ let transporter = null;
 
 const getTransporter = () => {
   if (!transporter && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    const port = parseInt(process.env.SMTP_PORT || "587");
     transporter = createTransport({
       host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_PORT === "465",
+      port: port,
+      secure: port === 465,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false,
       },
     });
   }
@@ -42,11 +46,13 @@ export const sendEmail = async ({ to, subject, html, text }) => {
       text: text || html.replace(/<[^>]*>/g, ""),
     };
     console.log("📧 Sending email to:", to, "Subject:", subject);
+    console.log("📧 SMTP config:", { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER });
     const info = await mailTransporter.sendMail(mailOptions);
     console.log("✅ Email sent successfully:", info.messageId);
     return info;
   } catch (error) {
     console.error("⚠️ Failed to send email:", error.message);
+    console.error("⚠️ SMTP Error details:", error);
     return null;
   }
 };
